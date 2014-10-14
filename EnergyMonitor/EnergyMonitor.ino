@@ -55,7 +55,7 @@ void calculateCurrentUsage()
 	unsigned long deltaTPulse = currentPulseMillis - previousPulseMillis;
 	previousPulseMillis = currentPulseMillis;
 
-	currentWattUsage = ( 3600000 / ( amountOfPulsesPerKW * deltaTPulse * 1000 ) )
+	currentWattUsage = ( 3600000 / ( amountOfPulsesPerKW * deltaTPulse * 1000 ) );
 	Serial.println(currentWattUsage);
 }
 
