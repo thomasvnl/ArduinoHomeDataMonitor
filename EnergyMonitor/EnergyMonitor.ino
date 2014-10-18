@@ -1,67 +1,157 @@
 /*!
-	Monitors current energy usage and total energy usage
-	by counting pulses and time between pulses.
+	Monitors current energy usage and total energy usage by counting the amount
+	of pulses is receives via a photosensitive sensor that is connected to
+	intterupt(0).
 
 	Circuit:
-	* Arduino Yun
-	* Light Sensor connected to interrupt 0 (pin 3)
+	-- Arduino Yun
+	-- Photosensitive sensor connected to pin 3
 */
+#include <FileIO.h>
 
-bool hadFirstPulse;
+//! PINS
+const int StatusLEDPin = 13;
+const int analogInputPin = A0;
 
-//! Counts the amount of pulses
+//! Keep track of the amount of pulses (Watts) that have triggered
 volatile unsigned long pulseCount = 0;
 
-//! Stores the current usage in Watts for debugging purposes
+//! Keep track of the current Watt usage
 volatile unsigned long currentWattUsage = 0;
 
-//! Stores the last time data was send to the filesystem
-unsigned long previousIntervalMillis = 0;
+//! Keep track of the last time a pulse was seen
+unsigned long prevPulseTime = 0;
 
-//! Stores the last time a pulse was seen
-unsigned long previousPulseMillis = 0;
+//! Keep track of the last time data was logged
+unsigned long prevDataLogTime = 0;
 
-//! Const interval at which we try to store data
-const long interval = 300000;
+//! CSV Delimiter used for data logging
+const char delim = ',';
 
-//! Const amount of pulses per kW
-const int amountOfPulsesPerKW = 1000.0;
+//! CSV New Line
+const char nl = '\n';
 
-//! Setup, (set the initial pinMode and) attachInterrupt of the sensor
-void setup()
-{
-        hadFirstPulse = false;
-	// Setup Serial connection
+//! File to log to
+const char dataFile[ ] = "/mnt/sd/PulseCount.log";
+
+//! Const length of one minute millis
+const unsigned long aMinute = 60000;
+
+//! Const interval which defines the amount of time between data logs,
+//! is set in (void) setup();
+const unsigned long interval = aMinute * 5;
+
+//! Const amount of pulses per kWh
+const unsigned int pulsesPerKWH = 1000;
+
+//! Current Light value
+unsigned int currentLightStrength = 0;
+
+//! Setup the interrupt and define minutes in interval
+void setup(){
+
+	attachInterrupt( 0, handlePulse, FALLING );
+
+	Bridge.begin();
 	Serial.begin(9600);
-	// Attach interrupt to the pulse method
-	// Interrupt gets triggered whenever the input is FALLING
-	attachInterrupt(0, pulse, FALLING);
+	FileSystem.begin();
+
+	while(!Serial);
+	Serial.println("Started logging at " + getTimestamp() );
 }
 
-void loop()
-{
+void loop(){
+	readCurrentLightStrength();
 
+	unsigned long curDataLogTime = millis();
+
+	if( curDataLogTime - prevDataLogTime > interval )
+	{
+		prevDataLogTime = curDataLogTime;
+
+		String data = String(currentLightStrength) + delim + String( pulseCount );
+		pulseCount = 0;
+
+		if( !writeToFile( data ) ){
+			Serial.println( "Could not write to file :'( " );
+		}
+	}
 }
 
-void pulse()
+void handlePulse()
 {
-	// Increment the current Pulse Count
+	unsigned long curPulseTime = millis();
 	pulseCount++;
-	calculateCurrentUsage();
+
+	if( prevPulseTime != 0 ){
+		calculateCurrentWattUsage( curPulseTime );
+		//Serial.println( "DeltaTPulseTime: " + String( curPulseTime - prevPulseTime ) );
+		//Serial.println( "New Watt usage: " + String( currentWattUsage ) );
+	}
+
+	prevPulseTime = curPulseTime;
 }
 
-void calculateCurrentUsage()
+void calculateCurrentWattUsage( unsigned long curPulseTime )
 {
-	unsigned long currentPulseMillis = millis();
-	unsigned long deltaTPulse = currentPulseMillis - previousPulseMillis;
-        previousPulseMillis = currentPulseMillis;
-        
-        Serial.println("Delta T: " + String(deltaTPulse) )
-        
-	currentWattUsage = ( 3600000.0 / ( amountOfPulsesPerKW * deltaTPulse ) ) * 1000.0;
-	Serial.print("Kilo Watt = ");
-        Serial.println( (currentWattUsage / 1000.0 ));
+	unsigned long deltaTPulseTime = curPulseTime - prevPulseTime;
+	currentWattUsage = ( 3600000.0 / ( pulsesPerKWH * deltaTPulseTime ) ) * 1000.0;
 }
 
+void readCurrentLightStrength()
+{
+	// Rectify measurement of sensor
+	currentLightStrength = ( 1023 - analogRead( analogInputPin ) );
+}
 
+void activeLED(){
+	digitalWrite( StatusLEDPin, HIGH );
+}
 
+void inactiveLED(){
+	digitalWrite( StatusLEDPin, LOW );
+}
+
+bool writeToFile( String data )
+{
+	File fh = FileSystem.open( dataFile, FILE_APPEND );
+	if( !dataFile ) return false;
+	
+	activeLED();
+
+	data = getTimestampZeroSec() + delim + data + nl;
+	fh.print( data );
+	fh.close();
+
+	inactiveLED();
+	
+	//Serial.println( "Wrote to log" );
+
+	return true;
+}
+
+String getTimestampZeroSec()
+{
+	String result = getTimestamp();
+	result = result.substring(0, result.length() - 2 );
+	result += String("00");
+	return result;
+}
+
+String getTimestamp(){
+	String result;
+	Process time;
+
+	time.begin("date");
+	time.addParameter("+%Y-%m-%d %T");
+	time.run();
+
+	while( time.available() > 0 ){
+		char c = time.read();
+		if( c != '\n' ){
+			result += c;
+		}
+	}
+
+	return result;
+}
