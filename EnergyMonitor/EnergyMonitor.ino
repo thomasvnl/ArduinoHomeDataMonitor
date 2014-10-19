@@ -1,168 +1,198 @@
-/*!
-	Monitors current energy usage and total energy usage by counting the amount
-	of pulses is receives via a photosensitive sensor that is connected to
-	intterupt(0).
+//! EnergyMonitor.ino
+/**!
+	Made for use with Arduino Yún
 
-	Circuit:
-	-- Arduino Yun
-	-- Photosensitive sensor connected to pin 3
+	Monitors current and total energy usage by counting pulses. These pulse can 
+	arrise in the form of light- or electic pulses, depending on your setup. 
+	This setup relies on a light sensor that outputs 0 when light is detected
+	and 1 when no light is detected. The digital output of this sensor is 
+	connected to Interrupt(0) of the Arduino Yún.
+
 */
+
 #include <FileIO.h>
+#include <Console.h>
+#include <Process.h>
 
-//! PINS
-const int StatusLEDPin = 13;
+//! Define the used pins (and mode)
+const int LEDPin = 13;
 const int analogInputPin = A0;
+const int interruptPin = 0;
+const int interruptMode = FALLING;
 
-//! Keep track of the amount of pulses (Watts) that have triggered
+//! Keep track of the amount of pulses (W/h) that were measured
 volatile unsigned long pulseCount = 0;
 
-//! Keep track of the current Watt usage
+//! Keep track of the current energy usage (in W, between pulses)
 volatile unsigned long currentWattUsage = 0;
 
-//! Keep track of the last time a pulse was seen
-unsigned long prevPulseTime = 0;
+//! Handle with interrupts correctly (Console), this is needed
+volatile bool currentUsageHasNewValue = false;
 
-//! Keep track of the last time data was logged
-unsigned long prevDataLogTime = 0;
+//! Keep track of the last time a pulse was measured
+unsigned long mPrevPulseTime = 0;
 
-//! CSV Delimiter used for data logging
-const char delim = ',';
+//! Keep track of the last time the data was "logged"
+unsigned long mPrevDataLogTime = 0;
 
-//! CSV New Line
-const char nl = '\n';
+//! The length of one minute in milliseconds
+const unsigned long mMinute = 60000;
 
-//! File to log to
-const char dataFile[ ] = "/mnt/sd/PulseCount.log";
+//! The length of one hour in milliseconds
+const unsigned long mHour = mMinute * 60;
 
-//! Const length of one minute millis
-const unsigned long aMinute = 60000;
+//! Interval to use between logging data
+const unsigned long mInterval = mMinute * 5;
 
-//! Const interval which defines the amount of time between data logs,
-//! is set in (void) setup();
-//const unsigned long interval = aMinute * 5;
-const unsigned long interval = aMinute * 5;
-
-//! Const amount of pulses per kWh
+//! Amount of pulses per kWh (as provided by your digital power meter)
 const unsigned int pulsesPerKWH = 1000;
 
-//! Current Light value
-unsigned int currentLightStrength = 0;
+//! The datafiles to write to
+const char wattUsageFile[ ] = "/mnt/sd/EnergyMonitor/wattUsage.csv";
+const char wattHourFile[ ] = "/mnt/sd/EnergyMonitor/wattHour.csv";
 
-//! Setup the interrupt and define minutes in interval
-void setup(){
+//! Standard characters for CSV files
+const char delimiter = ',';
+const char endline = '\n';
 
-	attachInterrupt( 0, handlePulse, FALLING );
+//! Delimiter for the console output
+const String consoleDelim = " >> ";
+
+//! Setup the interrupt and connection to Bridge/Console/FileSystem
+void setup()
+{
+	LEDSwitchOn();
+	// Delay neccesarry to wait for Bridge (in some cases).
+	delay(2500);
+
+	attachInterrupt( 0, handleNewPulse, interruptMode );
 
 	Bridge.begin();
 	Console.begin();
 	FileSystem.begin();
 
-	//while(!Console);
-	//Console.println("Started logging at " + getTimestamp() );
+	LEDSwitchOff();
+
 }
 
-void loop(){
-	readCurrentLightStrength();
-
-	unsigned long curDataLogTime = millis();
-
-	if( curDataLogTime - prevDataLogTime > interval )
-	{
-		prevDataLogTime = curDataLogTime;
-		Console.println( getTimestamp() + ">> Pulses: " +  String(pulseCount) + "; Current watt usage: " + String( calculateIntervalWattUsage() ) );
-		String data = String(currentLightStrength) + delim + String( pulseCount ) + delim + String( calculateIntervalWattUsage() );
-
-		if( !writeToFile( data ) ){
-			Console.println( "Could not write to file :'( " );
-		}
-                else
-                {
-                   pulseCount = 0; 
-                }
-	}
-}
-
-void handlePulse()
+//! The well known Arduino loop-da-loop loop 
+void loop()
 {
-	unsigned long curPulseTime = millis();
+	unsigned long mCurDataLogTime = millis();
+
+	if( mCurDataLogTime - mPrevDataLogTime > mInterval )
+	{
+		mPrevDataLogTime = mCurDataLogTime;
+
+		String data;
+		String timestamp = getTimestamp();
+		unsigned long intervalWattUsage = getIntervalWattUsage();
+
+		Console.println(timestamp + consoleDelim + "Interval Usage (W): " + String(intervalWattUsage) );
+		data = timestamp + delimiter + String(intervalWattUsage) + endline;
+		if( !writeDataToFile( wattUsageFile, data ) )
+		{
+			Console.println("Could not write Interval Watt Usage to file :(!");
+		}
+
+		Console.println(timestamp + consoleDelim + "W/h used: " + String(pulseCount ) );
+		data = timestamp + delimiter + String(pulseCount) + endline;
+		if( !writeDataToFile( wattHourFile, data ) )
+		{
+			Console.println("Could not write Watt/Hour Usage to file :(!");
+		}
+		else
+		{
+			pulseCount = 0;
+		}
+	}
+
+	if( currentUsageHasNewValue )
+	{
+		currentUsageHasNewValue = false;
+		Console.println( getTimestamp() + consoleDelim + "Current Usage (W): " + String( currentWattUsage ) );
+	}
+
+}
+
+//! Counts the pulse and calls calculateCurrentWattUsage with the current millis
+//! if their has been a previous pulse.
+void handleNewPulse()
+{
+	unsigned long mCurPulseTime = millis();
 	pulseCount++;
 
-	if( prevPulseTime != 0 ){
-		calculateCurrentWattUsage( curPulseTime );
-		//Serial.println( "DeltaTPulseTime: " + String( curPulseTime - prevPulseTime ) );
-		// Can't do this, interrupt inside an interrupt freezes arduino; //Console.println( "New Watt usage: " + String( currentWattUsage ) );
+	if( mPrevPulseTime != 0 )
+	{
+		calculateCurrentWattUsage( mCurPulseTime );
 	}
 
-	prevPulseTime = curPulseTime;
+	mPrevPulseTime = mCurPulseTime;
 }
 
-void calculateCurrentWattUsage( unsigned long curPulseTime )
+//! Method that calculates the current watt usage by using the time between 
+//! pulses.
+void calculateCurrentWattUsage( unsigned long mCurPulseTime )
 {
-	unsigned long deltaTPulseTime = curPulseTime - prevPulseTime;
-	currentWattUsage = ( 3600000.0 / ( pulsesPerKWH * deltaTPulseTime ) ) * 1000.0;
+	unsigned long mPulseDeltaTime = mCurPulseTime - mPrevPulseTime;
+	currentWattUsage = ( mHour / ( pulsesPerKWH * mPulseDeltaTime ) ) * 1000;
+	currentUsageHasNewValue = true;
 }
 
-unsigned long calculateIntervalWattUsage()
+//! Method that returns the interval watt usage (may differ from above). Is less
+//! prone to irregularities thus may not show all information about the "current"
+//! usage.
+unsigned long getIntervalWattUsage()
 {
- unsigned long meanWatt;
- meanWatt = ( pulseCount * 3600000 ) / interval; 
- return meanWatt;
+	unsigned long watts = ( pulseCount * mHour ) / mInterval;
+	return watts;
 }
 
-void readCurrentLightStrength()
+//! Get the timestamp from the Linux system (NTP keeps it right). Returns the 
+//! date and time in Y-m-d H:M:S format, because that makes sense.
+String getTimestamp()
 {
-	// Rectify measurement of sensor
-	currentLightStrength = ( 1023 - analogRead( analogInputPin ) );
-}
-
-void activeLED(){
-	digitalWrite( StatusLEDPin, HIGH );
-}
-
-void inactiveLED(){
-	digitalWrite( StatusLEDPin, LOW );
-}
-
-bool writeToFile( String data )
-{
-	File fh = FileSystem.open( dataFile, FILE_APPEND );
-	if( !dataFile ) return false;
-	
-	activeLED();
-
-	data = getTimestampZeroSec() + delim + data + nl;
-	fh.print( data );
-	fh.close();
-
-	inactiveLED();
-	
-	//Serial.println( "Wrote to log" );
-
-	return true;
-}
-
-String getTimestampZeroSec()
-{
-	String result = getTimestamp();
-	result = result.substring(0, result.length() - 2 );
-	result += String("00");
-	return result;
-}
-
-String getTimestamp(){
 	String result;
-	Process time;
+	Process p;
 
-	time.begin("date");
-	time.addParameter("+%Y-%m-%d %T");
-	time.run();
+	p.begin("date");
+	p.addParameter("+%Y-%m-%d %T");
+	p.run();
 
-	while( time.available() > 0 ){
-		char c = time.read();
-		if( c != '\n' ){
+	while( p.available() > 0 )
+	{
+		char c = p.read();
+		if( c != '\n' )
+		{
 			result += c;
 		}
 	}
 
 	return result;
+}
+
+//! Helper method to switch the status LED on (LEDPin)
+void LEDSwitchOn()
+{
+	digitalWrite( LEDPin, HIGH );
+}
+
+//! Helper method to switch the status LED off (LEDPin)
+void LEDSwitchOff()
+{
+	digitalWrite( LEDPin, LOW );
+}
+
+//! Method that writes to a given file
+bool writeDataToFile( const char* fileName, String data )
+{
+	File fileHandler = FileSystem.open( fileName, FILE_APPEND );
+	if( !fileHandler ) return false;
+
+	LEDSwitchOn();
+	LEDSwitchOff();
+	LEDSwitchOn();
+	fileHandler.print(data);
+	fileHandler.close();
+	LEDSwitchOff();
 }
