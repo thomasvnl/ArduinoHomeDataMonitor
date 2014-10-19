@@ -39,6 +39,7 @@ const unsigned long aMinute = 60000;
 
 //! Const interval which defines the amount of time between data logs,
 //! is set in (void) setup();
+//const unsigned long interval = aMinute * 5;
 const unsigned long interval = aMinute * 5;
 
 //! Const amount of pulses per kWh
@@ -53,11 +54,11 @@ void setup(){
 	attachInterrupt( 0, handlePulse, FALLING );
 
 	Bridge.begin();
-	Serial.begin(9600);
+	Console.begin();
 	FileSystem.begin();
 
-	while(!Serial);
-	Serial.println("Started logging at " + getTimestamp() );
+	//while(!Console);
+	//Console.println("Started logging at " + getTimestamp() );
 }
 
 void loop(){
@@ -68,13 +69,16 @@ void loop(){
 	if( curDataLogTime - prevDataLogTime > interval )
 	{
 		prevDataLogTime = curDataLogTime;
-
-		String data = String(currentLightStrength) + delim + String( pulseCount );
-		pulseCount = 0;
+		Console.println( getTimestamp() + ">> Pulses: " +  String(pulseCount) + "; Current watt usage: " + String( calculateIntervalWattUsage() ) );
+		String data = String(currentLightStrength) + delim + String( pulseCount ) + delim + String( calculateIntervalWattUsage() );
 
 		if( !writeToFile( data ) ){
-			Serial.println( "Could not write to file :'( " );
+			Console.println( "Could not write to file :'( " );
 		}
+                else
+                {
+                   pulseCount = 0; 
+                }
 	}
 }
 
@@ -86,7 +90,7 @@ void handlePulse()
 	if( prevPulseTime != 0 ){
 		calculateCurrentWattUsage( curPulseTime );
 		//Serial.println( "DeltaTPulseTime: " + String( curPulseTime - prevPulseTime ) );
-		//Serial.println( "New Watt usage: " + String( currentWattUsage ) );
+		// Can't do this, interrupt inside an interrupt freezes arduino; //Console.println( "New Watt usage: " + String( currentWattUsage ) );
 	}
 
 	prevPulseTime = curPulseTime;
@@ -96,6 +100,13 @@ void calculateCurrentWattUsage( unsigned long curPulseTime )
 {
 	unsigned long deltaTPulseTime = curPulseTime - prevPulseTime;
 	currentWattUsage = ( 3600000.0 / ( pulsesPerKWH * deltaTPulseTime ) ) * 1000.0;
+}
+
+unsigned long calculateIntervalWattUsage()
+{
+ unsigned long meanWatt;
+ meanWatt = ( pulseCount * 3600000 ) / interval; 
+ return meanWatt;
 }
 
 void readCurrentLightStrength()
