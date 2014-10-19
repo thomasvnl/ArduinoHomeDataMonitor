@@ -92,14 +92,14 @@ void loop()
 		data = timestamp + delimiter + String(intervalWattUsage) + endline;
 		if( !writeDataToFile( wattUsageFile, data ) )
 		{
-			Console.println("Could not write Interval Watt Usage to file :(!");
+			Console.println( getTimestamp() + consoleDelim + "Could not write Interval Watt Usage to file :(!");
 		}
 
 		Console.println(timestamp + consoleDelim + "W/h used: " + String(pulseCount ) );
 		data = timestamp + delimiter + String(pulseCount) + endline;
 		if( !writeDataToFile( wattHourFile, data ) )
 		{
-			Console.println("Could not write Watt/Hour Usage to file :(!");
+			Console.println( getTimestamp() + consoleDelim + "Could not write Watt/Hour Usage to file :(!");
 		}
 		else
 		{
@@ -135,7 +135,7 @@ void handleNewPulse()
 void calculateCurrentWattUsage( unsigned long mCurPulseTime )
 {
 	unsigned long mPulseDeltaTime = mCurPulseTime - mPrevPulseTime;
-	currentWattUsage = ( mHour / ( pulsesPerKWH * mPulseDeltaTime ) ) * 1000;
+	currentWattUsage = ( mHour * 1.0 / ( pulsesPerKWH * mPulseDeltaTime ) ) * 1000.0;
 	currentUsageHasNewValue = true;
 }
 
